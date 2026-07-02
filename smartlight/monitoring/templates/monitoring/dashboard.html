@@ -112,6 +112,42 @@
 
   .foot { margin-top: 24px; text-align: center; font-size: 12px; color: var(--muted); }
 
+  .log-section {
+    margin-top: 24px; padding: 22px; border-radius: 20px;
+    background: linear-gradient(180deg, rgba(17,23,34,.95), rgba(13,19,28,.95));
+    border: 1px solid var(--border); box-shadow: 0 16px 36px -24px rgba(0,0,0,.7);
+  }
+  .log-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+  .log-head h3 { margin-top: 2px; font-size: 18px; }
+  .log-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .log-filters select {
+    min-width: 150px; height: 38px; border-radius: 8px; background: var(--card); color: var(--fg);
+    border: 1px solid var(--border); padding: 0 10px;
+  }
+  .log-list { display: flex; flex-direction: column; gap: 10px; }
+  .log-item {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+    border: 1px solid var(--border); background: var(--card); border-radius: 12px; padding: 12px 14px;
+  }
+  .log-item.on { border-color: rgba(52,211,153,.35); }
+  .log-item.off { border-color: rgba(100,116,139,.35); }
+  .log-item .meta strong { display: block; margin-bottom: 4px; }
+  .log-item .meta span { font-size: 12px; color: var(--muted); }
+  .log-badge {
+    display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .log-badge.on { background: rgba(52,211,153,.15); color: var(--on); }
+  .log-badge.off { background: rgba(100,116,139,.15); color: var(--off); }
+  .log-empty { padding: 12px 0; color: var(--muted); font-size: 14px; }
+  .log-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  .log-pagination button {
+    background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; cursor: pointer;
+  }
+  .log-pagination button:disabled { opacity: .45; cursor: not-allowed; }
+  .log-pagination .page-info { color: var(--muted); font-size: 13px; }
+
   .detail-panel {
     background: linear-gradient(180deg, rgba(17,23,34,.95), rgba(13,19,28,.95));
     border: 1px solid var(--border); border-radius: 24px; padding: 24px;
@@ -210,15 +246,46 @@
     </section>
 
     <div class="grid" id="grid"></div>
-    <p class="foot">Tap a floor or use the selector for full sensor details · readings refresh every 2 seconds</p>
+
+    <section class="log-section">
+      <div class="log-head">
+        <div>
+          <div class="sector">Activity history</div>
+          <h3>Floor state changes</h3>
+        </div>
+        <div class="log-filters">
+          <div class="pill">
+            <div class="label">Overall</div>
+            <div class="val" id="logSummary">0 on · 0 off</div>
+          </div>
+          <select id="logFilter">
+            <option value="all">All statuses</option>
+            <option value="ON">On only</option>
+            <option value="OFF">Off only</option>
+          </select>
+        </div>
+      </div>
+      <div class="log-list" id="logList"></div>
+      <div class="log-pagination">
+        <button id="logPrevBtn" type="button">← Previous</button>
+        <div class="page-info" id="logPageInfo">Page 1</div>
+        <button id="logNextBtn" type="button">Next →</button>
+      </div>
+    </section>
+
+    <p class="foot">Tap a floor or use the selector for full sensor details · readings refresh every 5 seconds</p>
   </main>
 
 <script>
 const apiUrl = '/api/floors/';
 const floors = JSON.parse('{{ floors_json|escapejs }}');
+const initialActivityLog = JSON.parse('{{ activity_log_json|escapejs }}');
 const charts = {};
 let activeFloor = null;
 let detailChart = null;
+let activityLog = initialActivityLog || [];
+let logPage = 1;
+const LOG_PAGE_SIZE = 10;
 
 function timeLabel(d){ return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
 
@@ -342,12 +409,58 @@ function updateHeader(){
   document.getElementById('avgLux').textContent = avg;
 }
 
+function renderActivityLog(){
+  const list = document.getElementById('logList');
+  const summary = document.getElementById('logSummary');
+  const pageInfo = document.getElementById('logPageInfo');
+  const prevBtn = document.getElementById('logPrevBtn');
+  const nextBtn = document.getElementById('logNextBtn');
+  const filter = document.getElementById('logFilter').value;
+  const filtered = activityLog.filter(entry => filter === 'all' || entry.status === filter);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / LOG_PAGE_SIZE));
+
+  if (logPage > totalPages) {
+    logPage = totalPages;
+  }
+
+  summary.textContent = `${activityLog.filter(entry => entry.status === 'ON').length} on · ${activityLog.filter(entry => entry.status === 'OFF').length} off`;
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="log-empty">No activity matches this filter yet.</div>';
+    pageInfo.textContent = 'Page 1';
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+
+  const start = (logPage - 1) * LOG_PAGE_SIZE;
+  const pageEntries = filtered.slice().reverse().slice(start, start + LOG_PAGE_SIZE);
+
+  list.innerHTML = pageEntries.map(entry => `
+    <div class="log-item ${entry.status === 'ON' ? 'on' : 'off'}">
+      <div class="meta">
+        <strong>${entry.floor_name}</strong>
+        <span>${entry.date} · ${entry.time_display || entry.timestamp}</span>
+        <div style="margin-top:4px;font-size:12px;color:var(--muted)">${entry.details || `Changed to ${entry.status}`}</div>
+      </div>
+      <div class="log-badge ${entry.status === 'ON' ? 'on' : 'off'}">${entry.status}</div>
+    </div>
+  `).join('');
+
+  pageInfo.textContent = `Page ${logPage} of ${totalPages}`;
+  prevBtn.disabled = logPage <= 1;
+  nextBtn.disabled = logPage >= totalPages;
+}
+
 function refreshData(){
   fetch(apiUrl)
     .then(response => response.json())
     .then(data => {
       if (!data.floors) return;
       floors.splice(0, floors.length, ...data.floors);
+      if (data.activity_log) {
+        activityLog = data.activity_log;
+      }
       if (activeFloor) {
         activeFloor = floors.find(f => f.id === activeFloor.id) || null;
       }
@@ -362,15 +475,35 @@ function render(){
   renderOverview();
   updateHeader();
   renderDetail();
+  renderActivityLog();
 }
 
 document.getElementById('floorSelect').addEventListener('change', (event) => {
   setActiveFloor(event.target.value);
 });
+document.getElementById('logFilter').addEventListener('change', () => {
+  logPage = 1;
+  renderActivityLog();
+});
+document.getElementById('logPrevBtn').addEventListener('click', () => {
+  if (logPage > 1) {
+    logPage -= 1;
+    renderActivityLog();
+  }
+});
+document.getElementById('logNextBtn').addEventListener('click', () => {
+  const filter = document.getElementById('logFilter').value;
+  const filtered = activityLog.filter(entry => filter === 'all' || entry.status === filter);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / LOG_PAGE_SIZE));
+  if (logPage < totalPages) {
+    logPage += 1;
+    renderActivityLog();
+  }
+});
 
 render();
 refreshData();
-setInterval(refreshData, 2000);
+setInterval(refreshData, 5000);
 </script>
 </body>
 </html>

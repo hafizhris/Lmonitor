@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import json
 
 from .influx import client, bucket, org
+from .models import ActivityLogEntry
 import math
 import random
 
@@ -31,6 +32,116 @@ def _generate_dummy_trend(base, count=30, interval_seconds=120, amplitude=30, no
     return trend
 
 
+def _build_activity_log(floors, previous_log=None):
+    """Create a persistent state-change history for floor status updates."""
+    previous_log = previous_log or []
+    if not floors:
+        return previous_log
+
+    now = datetime.now()
+    existing_entries = list(ActivityLogEntry.objects.order_by("id"))
+    history = []
+
+    if existing_entries:
+        history = [
+            {
+                "floor_id": entry.floor_id,
+                "floor_name": entry.floor_name,
+                "status": entry.status,
+                "timestamp": entry.timestamp,
+                "date": entry.date,
+                "time_display": entry.time_display,
+            }
+            for entry in existing_entries
+        ]
+    elif previous_log:
+        history = [dict(entry) for entry in previous_log]
+        for entry in history:
+            ActivityLogEntry.objects.create(
+                floor_id=entry.get("floor_id"),
+                floor_name=entry.get("floor_name", entry.get("floor_id")),
+                status=entry.get("status", "UNKNOWN"),
+                timestamp=entry.get("timestamp", now.strftime("%H:%M:%S")),
+                date=entry.get("date", now.strftime("%Y-%m-%d")),
+                time_display=entry.get("time_display", now.strftime("%I:%M:%S %p")),
+            )
+    else:
+        history = []
+
+    latest_by_floor = {}
+    for entry in reversed(history):
+        floor_id = entry.get("floor_id")
+        if floor_id and floor_id not in latest_by_floor:
+            latest_by_floor[floor_id] = entry
+
+    for floor in floors:
+        floor_id = floor.get("id")
+        current_status = floor.get("light_status", {}).get("label", "UNKNOWN")
+        previous_entry = latest_by_floor.get(floor_id)
+        if previous_entry is None:
+            if history:
+                continue
+            new_entry = {
+                "floor_id": floor_id,
+                "floor_name": floor.get("name", floor_id),
+                "status": current_status,
+                "timestamp": now.strftime("%H:%M:%S"),
+                "date": now.strftime("%Y-%m-%d"),
+                "time_display": now.strftime("%I:%M:%S %p"),
+                "details": f"{floor.get('name', floor_id)} changed to {current_status} at {now.strftime('%H:%M:%S')} on {now.strftime('%Y-%m-%d')}"
+            }
+            history.append(new_entry)
+            ActivityLogEntry.objects.create(
+                floor_id=new_entry["floor_id"],
+                floor_name=new_entry["floor_name"],
+                status=new_entry["status"],
+                timestamp=new_entry["timestamp"],
+                date=new_entry["date"],
+                time_display=new_entry["time_display"],
+            )
+            continue
+        if previous_entry.get("status") == current_status:
+            continue
+
+        new_entry = {
+            "floor_id": floor_id,
+            "floor_name": floor.get("name", floor_id),
+            "status": current_status,
+            "timestamp": now.strftime("%H:%M:%S"),
+            "date": now.strftime("%Y-%m-%d"),
+            "time_display": now.strftime("%I:%M:%S %p"),
+            "details": f"{floor.get('name', floor_id)} changed to {current_status} at {now.strftime('%H:%M:%S')} on {now.strftime('%Y-%m-%d')}"
+        }
+        history.append(new_entry)
+        ActivityLogEntry.objects.create(
+            floor_id=new_entry["floor_id"],
+            floor_name=new_entry["floor_name"],
+            status=new_entry["status"],
+            timestamp=new_entry["timestamp"],
+            date=new_entry["date"],
+            time_display=new_entry["time_display"],
+        )
+
+    return history
+
+
+def _extract_latest_sensor_snapshot(records):
+    """Read the newest available sensor values from a sorted record set."""
+    data = {"adc": None, "lux": None, "light_status": None}
+    for record in records:
+        field_name = record.get_field()
+        value = record.get_value()
+        if field_name == "adc" and data["adc"] is None:
+            data["adc"] = int(value) if value is not None else None
+        elif field_name == "lux" and data["lux"] is None:
+            data["lux"] = int(value) if value is not None else None
+        elif field_name == "light_status" and data["light_status"] is None:
+            data["light_status"] = _format_light_status(value)
+    if data["light_status"] is None:
+        data["light_status"] = _format_light_status(0)
+    return data
+
+
 def _get_influxdb_latest_data():
     """Fetch the latest reading from InfluxDB for Floor 4."""
     try:
@@ -40,24 +151,14 @@ def _get_influxdb_latest_data():
           |> range(start: -1h)
           |> filter(fn: (r) => r["_measurement"] == "Light_Monitoring")
           |> sort(columns: ["_time"], desc: true)
-          |> limit(n: 3)
+          |> limit(n: 10)
         '''
         result = query_api.query(org=org, query=query)
-        
-        data = {"adc": None, "lux": None, "light_status": None}
+
+        records = []
         for table in result:
-            for record in table.records:
-                field_name = record.get_field()
-                value = record.get_value()
-                if field_name == "adc":
-                    data["adc"] = int(value) if value is not None else None
-                elif field_name == "lux":
-                    data["lux"] = int(value) if value is not None else None
-                elif field_name == "light_status":
-                    data["light_status"] = _format_light_status(value)
-        if data["light_status"] is None:
-            data["light_status"] = _format_light_status(0)
-        return data
+            records.extend(table.records)
+        return _extract_latest_sensor_snapshot(records)
     except Exception as e:
         print(f"Error fetching InfluxDB data: {e}")
         return {"adc": 0, "lux": 0, "light_status": _format_light_status(0), "error": True}
@@ -181,9 +282,17 @@ def dashboard(request):
     lights_on = sum(1 for f in floors if f["light_status"]["label"] == "ON")
     avg_lux = sum(f["lux"] for f in floors) // total_floors if total_floors > 0 else 0
     
+    activity_log = _build_activity_log(
+        floors,
+        previous_log=request.session.get("activity_log", []),
+    )
+    request.session["activity_log"] = activity_log
+    request.session.modified = True
+
     context = {
         "floors": floors,  # For template iteration
         "floors_json": json.dumps(floors),  # For JavaScript
+        "activity_log_json": json.dumps(activity_log),
         "total_floors": total_floors,
         "lights_on": lights_on,
         "avg_lux": avg_lux,
@@ -349,9 +458,17 @@ class FloorDataAPI(APIView):
         lights_on = sum(1 for f in floors if f["light_status"]["label"] == "ON")
         avg_lux = sum(f["lux"] for f in floors) // total_floors if total_floors > 0 else 0
         
+        activity_log = _build_activity_log(
+            floors,
+            previous_log=request.session.get("activity_log", []),
+        )
+        request.session["activity_log"] = activity_log
+        request.session.modified = True
+
         return Response({
             "status": "success",
             "floors": floors,
+            "activity_log": activity_log,
             "total_floors": total_floors,
             "lights_on": lights_on,
             "avg_lux": avg_lux,
