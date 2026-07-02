@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lmonitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --card: #111722;
+    --card-2: #0d131c;
+    --border: #1e2937;
+    --muted: #7d8ba1;
+    --fg: #e6ecf5;
+    --primary: #22d3ee;   /* cyan */
+    --accent: #fbbf24;    /* amber */
+    --on: #34d399;        /* green */
+    --off: #64748b;       /* slate */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      radial-gradient(1200px 600px at 20% -10%, rgba(34,211,238,.08), transparent 60%),
+      radial-gradient(1000px 500px at 90% 0%, rgba(251,191,36,.06), transparent 55%),
+      var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  .stat { font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+
+  /* HEADER */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    border-bottom: 1px solid var(--border);
+    background: rgba(17,23,34,.7);
+    backdrop-filter: blur(16px);
+  }
+  .header-inner {
+    max-width: 1180px; width: min(1180px, 100%); margin: 0 auto; padding: 18px 24px;
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: grid; place-items: center;
+    background: rgba(34,211,238,.15); color: var(--primary); font-size: 20px;
+  }
+  .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+  .brand p { font-size: 12px; color: var(--muted); }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  select {
+    height: 40px; min-width: 210px; padding: 0 12px;
+    background: var(--card); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 8px; font-size: 14px; cursor: pointer;
+  }
+  .pill {
+    border: 1px solid var(--border); background: var(--card);
+    border-radius: 8px; padding: 8px 16px;
+  }
+  .pill .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .pill .val { font-size: 18px; font-weight: 700; }
+  .pill .val.on { color: var(--on); }
+  .pill .val.accent { color: var(--accent); }
+  .pill .val .sub { font-size: 13px; color: var(--muted); font-weight: 500; }
+  .live {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(52,211,153,.15); color: var(--on);
+    border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 600;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--on); }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  /* MAIN */
+  main { max-width: 1180px; width: min(1180px, 100%); margin: 0 auto; padding: 32px 16px; }
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+  @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px)  { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: linear-gradient(180deg, var(--card), var(--card-2));
+    border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    box-shadow: 0 10px 30px -12px rgba(0,0,0,.6);
+    cursor: pointer; transition: border-color .2s, transform .2s;
+    min-width: 0;
+  }
+  .card:hover { border-color: rgba(34,211,238,.4); transform: translateY(-2px); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; }
+  .sector { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .card-head h3 { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 999px;
+  }
+  .status.on  { background: rgba(52,211,153,.15); color: var(--on); }
+  .status.off { background: rgba(100,116,139,.2); color: var(--off); }
+
+  .adc-block { margin-top: 16px; }
+  .adc-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .adc-val { font-size: 40px; font-weight: 800; color: var(--primary); line-height: 1; margin-top: 4px; }
+  .adc-val .unit { font-size: 14px; color: var(--muted); font-weight: 500; }
+
+  .chart-wrap { margin-top: 14px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .chart-head .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .chart-head .v { font-size: 13px; font-weight: 700; color: var(--accent); }
+  .chart-box { height: 88px; }
+
+  .foot { margin-top: 24px; text-align: center; font-size: 12px; color: var(--muted); }
+
+  .detail-panel {
+    background: linear-gradient(180deg, rgba(17,23,34,.95), rgba(13,19,28,.95));
+    border: 1px solid var(--border); border-radius: 24px; padding: 24px;
+    margin-bottom: 24px; box-shadow: 0 22px 40px -28px rgba(0,0,0,.7);
+  }
+  .detail-panel.hidden { display: none; }
+  .detail-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+  .detail-header h2 { margin-top: 6px; font-size: 28px; }
+  .detail-header .muted { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .detail-status { display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+  .detail-status.on { background: rgba(52,211,153,.15); color: var(--on); }
+  .detail-status.off { background: rgba(100,116,139,.15); color: var(--off); }
+  .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .detail-card { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 18px; }
+  .detail-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .detail-card .value { margin-top: 10px; font-size: 24px; font-weight: 800; color: var(--fg); }
+  .detail-chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 18px; }
+  .detail-chart-card .chart-head { margin-bottom: 12px; }
+  .detail-chart-card .chart-head .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .detail-chart-card .chart-head .v { font-size: 13px; color: var(--accent); }
+  .detail-panel .chart-box { height: 220px; }
+  .card.selected { border-color: rgba(34,211,238,.65); transform: translateY(-2px); }
+  @media (max-width: 900px) { .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <div class="logo">💡</div>
+        <div>
+          <h1>Lumina Control</h1>
+          <p>Building light monitoring · live</p>
+        </div>
+      </div>
+      <div class="controls">
+        <select id="floorSelect">
+          <option value="all">▦ All floors overview</option>
+          <option value="0">Ground Floor</option>
+          <option value="1">Floor 2</option>
+          <option value="2">Floor 3</option>
+          <option value="3">Floor 4</option>
+        </select>
+        <div class="pill">
+          <div class="label">Lights on</div>
+          <div class="val on" id="lightsOn">2<span class="sub">/4</span></div>
+        </div>
+        <div class="pill">
+          <div class="label">Avg lux</div>
+          <div class="val accent" id="avgLux">—</div>
+        </div>
+        <div class="live"><span class="dot pulse"></span> Live</div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="detail-panel hidden" id="detailPanel">
+      <div class="detail-header">
+        <div>
+          <div class="sector" id="detailSector">Sector 01</div>
+          <h2 id="detailTitle">Ground Floor</h2>
+          <p id="detailSubtitle" class="muted">Lobby · ESP32 Dev Module</p>
+        </div>
+        <div class="detail-status on" id="detailStatus">
+          <span class="dot pulse"></span>
+          <span id="detailStatusLabel">Live</span>
+        </div>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-card">
+          <div class="label">Current lux</div>
+          <div class="value" id="detailLux">402 lx</div>
+        </div>
+        <div class="detail-card">
+          <div class="label">ADC reading</div>
+          <div class="value" id="detailAdc">712 /1023</div>
+        </div>
+        <div class="detail-card">
+          <div class="label">Light status</div>
+          <div class="value" id="detailLightStatus">ON</div>
+        </div>
+        <div class="detail-card">
+          <div class="label">Last updated</div>
+          <div class="value" id="detailUpdated">—</div>
+        </div>
+      </div>
+      <div class="detail-chart-card">
+        <div class="chart-head">
+          <span class="k">Lux trend</span>
+          <span class="v" id="detailTrendNote">Updated live</span>
+        </div>
+        <div class="chart-box"><canvas id="detailChart"></canvas></div>
+      </div>
+    </section>
+
+    <div class="grid" id="grid"></div>
+    <p class="foot">Tap a floor or use the selector for full sensor details · readings refresh every 2 seconds</p>
+  </main>
+
+<script>
+const apiUrl = '/api/floors/';
+const floors = JSON.parse('{{ floors_json|escapejs }}');
+const charts = {};
+let activeFloor = null;
+let detailChart = null;
+
+function timeLabel(d){ return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+
+function setActiveFloor(value){
+  if (value === 'all') {
+    activeFloor = null;
+  } else {
+    activeFloor = floors[Number(value)];
+  }
+  render();
+}
+
+function buildCard(f, index){
+  const el = document.createElement('div');
+  el.className = 'card' + (activeFloor === f ? ' selected' : '');
+  el.innerHTML = `
+    <div class="card-head">
+      <div>
+        <div class="sector">Sector ${String(index+1).padStart(2,'0')}</div>
+        <h3>${f.name}</h3>
+      </div>
+      <div class="status ${f.light_status.label === 'ON' ? 'on' : 'off'}" data-status>
+        <span class="dot ${f.light_status.label === 'ON' ? 'pulse' : ''}" style="background:${f.light_status.label === 'ON' ? 'var(--on)' : 'var(--off)'}"></span>
+        ${f.light_status.label}
+      </div>
+    </div>
+    <div class="adc-block">
+      <div class="adc-label">ADC reading</div>
+      <div class="adc-val" data-adc>${f.adc}<span class="unit"> /1023</span></div>
+    </div>
+    <div class="chart-wrap">
+      <div class="chart-head">
+        <span class="k">Lux now</span>
+        <span class="v" data-lux>${f.lux} lx</span>
+      </div>
+      <div class="chart-box"><canvas id="c${index}"></canvas></div>
+    </div>`;
+  el.addEventListener('click', ()=> {
+    document.getElementById('floorSelect').value = String(index);
+    setActiveFloor(String(index));
+  });
+  return el;
+}
+
+function createChart(f, index){
+  const canvas = document.getElementById('c'+index);
+  if (!canvas) return;
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0,0,0,88);
+  g.addColorStop(0,'rgba(251,191,36,.45)'); g.addColorStop(1,'rgba(251,191,36,0)');
+  const labels = (f.trend || []).map(point => new Date(point.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
+  const values = (f.trend || []).map(point => point.value);
+
+  if (charts[index] && charts[index].canvas === canvas) {
+    charts[index].data.labels = labels;
+    charts[index].data.datasets[0].data = values;
+    charts[index].update('none');
+    return;
+  }
+
+  if (charts[index] && typeof charts[index].destroy === 'function') {
+    charts[index].destroy();
+    delete charts[index];
+  }
+
+  charts[index] = new Chart(ctx,{ type:'line', data:{ labels, datasets:[{ data: values, borderColor:'#fbbf24', borderWidth:2.5, fill:true, backgroundColor:g, tension:.4, pointRadius:0 }] }, options:{ responsive:true, maintainAspectRatio:false, animation:false, plugins:{legend:{display:false},tooltip:{enabled:true}}, scales:{ x:{display:false}, y:{display:false} } } });
+}
+
+function renderOverview(){
+  const grid = document.getElementById('grid');
+  Object.keys(charts).forEach(key => {
+    const chart = charts[key];
+    if (chart && typeof chart.destroy === 'function') {
+      chart.destroy();
+    }
+    delete charts[key];
+  });
+  grid.innerHTML = '';
+  floors.forEach((f,index)=> grid.appendChild(buildCard(f,index)));
+  floors.forEach((f,index)=> createChart(f,index));
+}
+
+function renderDetail(){
+  const panel = document.getElementById('detailPanel');
+  if (!activeFloor) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  const index = floors.findIndex(f => f.id === activeFloor.id);
+  document.getElementById('detailSector').textContent = `Sector ${String(index+1).padStart(2,'0')}`;
+  document.getElementById('detailTitle').textContent = activeFloor.name;
+  document.getElementById('detailSubtitle').textContent = `${activeFloor.location} · ${activeFloor.model}`;
+  document.getElementById('detailLux').textContent = `${activeFloor.lux} lx`;
+  document.getElementById('detailAdc').textContent = `${activeFloor.adc} /1023`;
+  document.getElementById('detailLightStatus').textContent = activeFloor.light_status.label;
+  document.getElementById('detailUpdated').textContent = timeLabel(new Date());
+  document.getElementById('detailStatusLabel').textContent = activeFloor.light_status.label === 'ON' ? 'Live' : 'Offline';
+  document.getElementById('detailStatus').className = `detail-status ${activeFloor.light_status.label === 'ON' ? 'on' : 'off'}`;
+
+  const ctx = document.getElementById('detailChart').getContext('2d');
+  const history = activeFloor.trend || [];
+  const labels = history.map(point => new Date(point.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
+  const values = history.map(point => point.value);
+
+  if (!detailChart) {
+    detailChart = new Chart(ctx,{ type:'line', data:{ labels, datasets:[{ data: values, borderColor:'#22d3ee', borderWidth:3, fill:true, backgroundColor:'rgba(34,211,238,.25)', tension:.35, pointRadius:0 }] }, options:{ responsive:true, maintainAspectRatio:false, animation:false, plugins:{legend:{display:false},tooltip:{enabled:true}}, scales:{ x:{display:false}, y:{display:false} } } });
+  } else {
+    detailChart.data.labels = labels;
+    detailChart.data.datasets[0].data = values;
+    detailChart.update('none');
+  }
+}
+
+function updateHeader(){
+  const on = floors.filter(f=>f.light_status.label === 'ON').length;
+  const avg = Math.round(floors.reduce((sum,f)=>sum + f.lux, 0) / floors.length);
+  document.getElementById('lightsOn').innerHTML = on + '<span class="sub">/' + floors.length + '</span>';
+  document.getElementById('avgLux').textContent = avg;
+}
+
+function refreshData(){
+  fetch(apiUrl)
+    .then(response => response.json())
+    .then(data => {
+      if (!data.floors) return;
+      floors.splice(0, floors.length, ...data.floors);
+      if (activeFloor) {
+        activeFloor = floors.find(f => f.id === activeFloor.id) || null;
+      }
+      render();
+    })
+    .catch(() => {
+      // keep existing values if API fails
+    });
+}
+
+function render(){
+  renderOverview();
+  updateHeader();
+  renderDetail();
+}
+
+document.getElementById('floorSelect').addEventListener('change', (event) => {
+  setActiveFloor(event.target.value);
+});
+
+render();
+refreshData();
+setInterval(refreshData, 2000);
+</script>
+</body>
+</html>
