@@ -88,13 +88,25 @@ def _get_influxdb_trend_data():
         return []
 
 
-def _sync_trend_with_value(trend, lux_value):
-    """Ensure the latest trend point matches the current lux value."""
+def _sync_trend_with_value(trend, lux_value, light_status=None):
+    """Keep the trend aligned with the current lux value, flattening to zero when data is missing or the sensor is off."""
     if not trend:
-        return trend
-    trend[-1]["value"] = lux_value
-    trend[-1]["time"] = datetime.now().isoformat()
-    return trend
+        return []
+
+    should_flatten = (
+        light_status is not None and light_status.get("label") == "OFF"
+    ) or lux_value in (None, 0, "0", False)
+
+    if should_flatten:
+        return [
+            {"time": (datetime.now() - timedelta(seconds=(len(trend) - 1 - i) * 120)).isoformat(), "value": 0}
+            for i in range(len(trend))
+        ]
+
+    updated_trend = [point.copy() for point in trend]
+    updated_trend[-1]["value"] = int(lux_value) if lux_value is not None else 0
+    updated_trend[-1]["time"] = datetime.now().isoformat()
+    return updated_trend
 
 
 def dashboard(request):
@@ -102,6 +114,14 @@ def dashboard(request):
     # Fetch Floor 4 data from InfluxDB
     floor4_data = _get_influxdb_latest_data()
     floor4_trend = _get_influxdb_trend_data()
+    floor4_light_status = floor4_data.get("light_status", _format_light_status(1))
+    floor4_lux = floor4_data.get("lux") if floor4_data.get("lux") is not None else 0
+    floor4_adc = floor4_data.get("adc") if floor4_data.get("adc") is not None else 0
+
+    if floor4_data.get("error", False) or floor4_light_status.get("label") == "OFF" or floor4_lux in (None, 0, "0", False):
+        floor4_lux = 0
+        floor4_adc = 0
+        floor4_light_status = _format_light_status(0)
     
     # Floor data - Floors 1-3 simulated, Floor 4 from InfluxDB with fallback
     floors = [
@@ -141,15 +161,16 @@ def dashboard(request):
         {
             "id": "F4",
             "name": "Floor 4",
-            "location": "Engineer Departement",
+            "location": "PT.Awan Teknologi Inovasi",
             "model": "ESP32 Dev Module",
-            "adc": floor4_data.get("adc") if floor4_data.get("adc") is not None else 2150,
-            "lux": floor4_data.get("lux") if floor4_data.get("lux") is not None else 650,
-            "light_status": floor4_data.get("light_status", _format_light_status(1)),
+            "adc": floor4_adc,
+            "lux": floor4_lux,
+            "light_status": floor4_light_status,
             "dummy": floor4_data.get("error", False),
             "trend": _sync_trend_with_value(
-                floor4_trend if floor4_trend else [{"time": (datetime.now() - timedelta(minutes=i)).isoformat(), "value": 650 + (i % 15 - 7)} for i in range(30)],
-                floor4_data.get("lux") if floor4_data.get("lux") is not None else 650
+                floor4_trend if floor4_trend else [{"time": (datetime.now() - timedelta(minutes=i)).isoformat(), "value": 0} for i in range(30)],
+                floor4_lux,
+                floor4_light_status
             ),
             "error": floor4_data.get("error", False)
         }
@@ -261,6 +282,14 @@ class FloorDataAPI(APIView):
         # Fetch Floor 4 data from InfluxDB
         floor4_data = _get_influxdb_latest_data()
         floor4_trend = _get_influxdb_trend_data()
+        floor4_light_status = floor4_data.get("light_status", _format_light_status(1))
+        floor4_lux = floor4_data.get("lux") if floor4_data.get("lux") is not None else 0
+        floor4_adc = floor4_data.get("adc") if floor4_data.get("adc") is not None else 0
+
+        if floor4_data.get("error", False) or floor4_light_status.get("label") == "OFF" or floor4_lux in (None, 0, "0", False):
+            floor4_lux = 0
+            floor4_adc = 0
+            floor4_light_status = _format_light_status(0)
         
         # Return floor data
         floors = [
@@ -300,15 +329,16 @@ class FloorDataAPI(APIView):
             {
                 "id": "F4",
                 "name": "Floor 4",
-                "location": "Engineer Departement",
+                "location": "PT.Awan Teknologi Inovasi",
                 "model": "ESP32 Dev Module",
-                "adc": floor4_data.get("adc") if floor4_data.get("adc") is not None else 2150,
-                "lux": floor4_data.get("lux") if floor4_data.get("lux") is not None else 650,
-                "light_status": floor4_data.get("light_status", _format_light_status(1)),
+                "adc": floor4_adc,
+                "lux": floor4_lux,
+                "light_status": floor4_light_status,
                 "dummy": floor4_data.get("error", False),
                 "trend": _sync_trend_with_value(
-                    floor4_trend if floor4_trend else [{"time": (datetime.now() - timedelta(minutes=i)).isoformat(), "value": 650 + (i % 15 - 7)} for i in range(30)],
-                    floor4_data.get("lux") if floor4_data.get("lux") is not None else 650
+                    floor4_trend if floor4_trend else [{"time": (datetime.now() - timedelta(minutes=i)).isoformat(), "value": 0} for i in range(30)],
+                    floor4_lux,
+                    floor4_light_status
                 ),
                 "error": floor4_data.get("error", False)
             }
